@@ -5,7 +5,8 @@
 
 dist/ gets:
   veteran_upgrades.pack            the mod (release build, no debug logging)
-  veteran_upgrades.jpg             Workshop thumbnail (made from the game's own unit art)
+  veteran_upgrades.jpg / .png      Workshop thumbnail (made from the game's own unit art); the current
+                                   CA launcher shows <pack>.png, the 2012 Mod Manager used <pack>.jpg
   workshop_description.bbcode      text for the Workshop page (docs/workshop_description.bbcode)
 The Assembly Kit's Mod Manager uploads a pack from the game's data folder and needs a .jpg with the
 same name next to it - that's what --install sets up.
@@ -64,10 +65,12 @@ def main():
     os.makedirs(DIST, exist_ok=True)
     shutil.copy(PACK, os.path.join(DIST, "veteran_upgrades.pack"))
     thumbnail(os.path.join(DIST, "veteran_upgrades.jpg"))
+    from PIL import Image
+    Image.open(os.path.join(DIST, "veteran_upgrades.jpg")).save(os.path.join(DIST, "veteran_upgrades.png"))
     shutil.copy(os.path.join(ROOT, "docs", "workshop_description.bbcode"), DIST)
     print("dist/:", ", ".join(sorted(os.listdir(DIST))))
     if install:
-        for name in ("veteran_upgrades.pack", "veteran_upgrades.jpg"):
+        for name in ("veteran_upgrades.pack", "veteran_upgrades.jpg", "veteran_upgrades.png"):
             shutil.copy(os.path.join(DIST, name), os.path.join(GAME_DATA, name))
         print(f"installed pack + thumbnail into {GAME_DATA}")
     return 0
