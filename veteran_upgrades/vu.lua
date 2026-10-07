@@ -258,7 +258,16 @@ local function vu_create_panel()
 	table.sort(nodes, function(a, b) if a.y ~= b.y then return a.y < b.y end return a.x < b.x end)
 	VU.nodes, VU.arrows = nodes, arrows
 	VU.nodes_by_id = {}
-	for _, nd in ipairs(nodes) do VU.nodes_by_id[nd.id] = nd vu_make_hoverable(nd) end
+	for _, nd in ipairs(nodes) do
+		VU.nodes_by_id[nd.id] = nd
+		vu_make_hoverable(nd)
+		-- The multiplayer level pips sit on top of the node with no tooltip of their own: let the
+		-- mouse through to the node so its tooltip shows (found by tools/vu_ui_audit.py).
+		for _, pip in ipairs({ "level_max", "level_unlocked" }) do
+			local a = vu_child(nd.addr, pip)
+			if a then pcall(function() UIComponent(a):SetInteractive(false) end) end
+		end
+	end
 	-- Multiplayer-only bits: clan tokens and the Fall of the Samurai tree.
 	-- The clan-token box (stats_list_bg: icon + "Clan Tokens" label) becomes the title box.
 	local tok = vu_child(addr, "clan_token_icon")

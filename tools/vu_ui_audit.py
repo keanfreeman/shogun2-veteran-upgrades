@@ -20,7 +20,10 @@ LINE = re.compile(r"^\S+ (ui\[\w+\]) ((?:\. )*)(.*?) \| children (\d+) \| visibl
 OURS = [r"^Clan points:", r"^Upgrades bought here apply", r"^Retrain", r"^Click again to retrain", r"^Respec ",
         r"^Reset:", r"^Confirm", r"^Cancel", r"^Close$", r"^Ability:", r"^Leadership / ", r"^Ranged / ",
         r"^Physical / ", r"^Melee / ", r"^Veteran Upgrades", r" / Clan points: \d+", r"Unit types your clan can recruit",
-        r"^[^/]+ / Requires ", r"^[^/]+ \d+ / \+", r"^[^/]+ \(max\) / \+", r"This unit frightens nearby enemies"]
+        r"^[^/]+ / Requires ", r"^[^/]+ \d+ / \+", r"^[^/]+ \(max\) / \+", r"This unit frightens nearby enemies",
+        r"^More unit types"]
+# Pure layout containers of the popup: interactive, but there is nothing to explain there.
+CONTAINERS = {"dock_area", "background", "bar", "grid", "shogun_subpanel", "subpanel"}
 LEFTOVER_TEXT = [r"Clan Tokens", r"token", r"\b999\b", r"Encyclop", r"Requires \d+ points in"]
 
 
@@ -40,13 +43,16 @@ def parse(path):
 
 
 def shown(rows):
-    """Yield (path, row) for rows whose ancestors are all visible."""
-    stack = []
+    """Yield (path, row) for rows whose ancestors are all visible, once per path (the log can hold
+    several sessions)."""
+    stack, seen = [], set()
     for r in rows:
         stack = stack[:r["depth"]]
         stack.append(r)
-        if all(x["visible"] for x in stack):
-            yield "/".join(x["id"] for x in stack), r
+        path = "/".join(x["id"] for x in stack)
+        if all(x["visible"] for x in stack) and (path, r["tooltip"]) not in seen:
+            seen.add((path, r["tooltip"]))
+            yield path, r
 
 
 def ours(tip):
@@ -63,7 +69,7 @@ def main():
     for view in sorted(views):
         rows = list(shown(views[view]))
         leftover = [(p, r) for p, r in rows if r["tooltip"] and not ours(r["tooltip"])]
-        bare = [(p, r) for p, r in rows if r["interactive"] and not r["tooltip"]]
+        bare = [(p, r) for p, r in rows if r["interactive"] and not r["tooltip"] and r["id"] not in CONTAINERS]
         texts = [(p, r) for p, r in rows if r["text"] and any(re.search(x, r["text"], re.I) for x in LEFTOVER_TEXT)]
         mine = sorted({r["tooltip"] for _, r in rows if r["tooltip"] and ours(r["tooltip"])})
         print(f"\n=== {view}: {len(rows)} components shown ===")
