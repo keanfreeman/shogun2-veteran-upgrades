@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+# Build outputs
+dist/
+veteran_upgrades/veteran_upgrades.pack
+veteran_upgrades/vu_sengoku.lua
+veteran_upgrades/vu_gempei.lua
+veteran_upgrades/vu_boshin.lua
+vu_log.txt
+# RPFM's schema is not redistributed here (see README)
+schemas/
