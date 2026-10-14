@@ -23,7 +23,8 @@ PACK = os.path.join(ROOT, "veteran_upgrades", "veteran_upgrades.pack")
 ART = ["ashigaru_inf_yari_ashigaru", "samurai_inf_katana_samurai", "ashigaru_inf_bow_ashigaru",
        "ashigaru_inf_matchlock_ashigaru", "samurai_cav_yari_cavalry", "samurai_inf_nodachi_samurai"]
 FONTS = ["/usr/share/fonts/dejavu/DejaVuSerif-Bold.ttf", "C:\\Windows\\Fonts\\georgiab.ttf",
-         "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf"]
+         "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf",
+         "/usr/share/fonts/google-noto/NotoSerif-Bold.ttf", "/usr/share/fonts/liberation-serif-fonts/LiberationSerif-Bold.ttf"]
 
 
 def run(*cmd):
