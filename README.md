@@ -23,6 +23,10 @@ attached. When you buy abilities, the mod switches your clan's recruitment to th
 (per-faction recruitment locks), and Retrain replaces existing units with it. Stat upgrades are
 effect bundles applied to your faction, covering the originals and all copies.
 
+The code is appended to CA's `export_advice.lua`, which every campaign script loads, and starts when
+the campaign script calls `SetCampaign`. The mod ships no `scripting.lua`, so it works alongside
+overhauls that replace it (such as Master of Strategy Sengoku).
+
 [`docs/ENGINE_NOTES.md`](docs/ENGINE_NOTES.md) lists what we learned about the engine, including
 the things that crash it.
 
@@ -62,7 +66,7 @@ The mod always writes a short `vu_log.txt` (purchases, battles, errors).
 
 ## Testing
 
-`tests/run_tests.py` runs the generated scripts against a mock of the campaign scripting API
+`tests/run_tests.py` loads the built pack's `export_advice.lua` against a mock of the campaign scripting API
 (`tests/mock_engine.lua`): the full flows on Sengoku and a smoke test on every campaign. It can't
 catch engine crashes, so changes still need a play test, ideally with `PROTON_LOG=1` / a debugger
 for native crashes.

@@ -1,5 +1,5 @@
 -------------------------------------------------------------------------------
--- Veteran Upgrades (see VU_VERSION), appended to the campaign scripting.lua
+-- Veteran Upgrades (see VU_VERSION), appended to CA's export_advice.lua by build.py (started from SetCampaign)
 --
 -- Clan-wide upgrades per unit family, using the multiplayer skill-tree popup as the panel.
 --   * Points: the clan earns 1 point per battle its units fight in (win or lose), into one pool
@@ -36,6 +36,57 @@ local function vu_guard(label, fn, ...)
 	local ok, err = pcall(fn, ...)
 	if not ok then vu_log("!! error in", label, tostring(err)) end
 end
+
+-- Debug builds trace every game_interface / CampaignUI call: "->" before it, "<-" after it. After a
+-- native crash, the last "->" line without a "<-" in vu_log.txt names the call that crashed.
+-- vu_skip.txt in the game folder (one method name per line, # comments) lists calls to log and
+-- skip instead, so a crash can be bisected without a rebuild, e.g. apply_effect_bundle, create_force.
+local VU_SKIP = {}
+if VU_DEBUG then
+	pcall(function()
+		local f = io.open("vu_skip.txt", "r")
+		if not f then return end
+		for l in f:lines() do
+			l = l:match("^%s*(.-)%s*$")
+			if l ~= "" and l:sub(1, 1) ~= "#" then VU_SKIP[l] = true end
+		end
+		f:close()
+	end)
+end
+
+local function vu_args(...)
+	local parts = {}
+	for i = 1, select("#", ...) do parts[#parts + 1] = tostring((select(i, ...))) end
+	return table.concat(parts, ", ")
+end
+
+local function vu_trace_ret(name, ok, ...)
+	if not ok then vu_log("<- ERROR", name, tostring((...))) error((...), 0) end
+	vu_log("<-", name, vu_args(...))
+	return ...
+end
+
+local function vu_trace_call(name, method, call, ...)
+	if VU_SKIP[method] then vu_log("-- SKIPPED (vu_skip.txt)", name .. "(" .. vu_args(...) .. ")") return nil end
+	vu_log("->", name .. "(" .. vu_args(...) .. ")")
+	return vu_trace_ret(name, pcall(call, ...))
+end
+
+local vu_gi_proxy = setmetatable({}, { __index = function(_, m)
+	return function(_, ...)
+		local real = EpisodicScripting.game_interface
+		return vu_trace_call("gi:" .. m, m, function(...) return real[m](real, ...) end, ...)
+	end
+end })
+local function vu_gi() return VU_DEBUG and vu_gi_proxy or EpisodicScripting.game_interface end
+
+local function vu_real_campaign_ui() return CampaignUI end
+local CampaignUI = VU_DEBUG and setmetatable({}, { __index = function(_, m)
+	return function(...)
+		local real = vu_real_campaign_ui()
+		return vu_trace_call("CampaignUI." .. m, m, real[m], ...)
+	end
+end }) or CampaignUI
 
 local function addr_key(addr) return tostring(addr) end
 local VU_RETRAIN_ICON = "data/ui/frontend ui/skills/skill_morale.tga"
@@ -132,7 +183,7 @@ local VU_AFTER_COMMIT   -- set by the recruitment code below
 local function vu_commit()
 	local p = VU.pending
 	if not p then return end
-	local fam, gi = p.fam, EpisodicScripting.game_interface
+	local fam, gi = p.fam, vu_gi()
 	VU.levels[fam.id] = VU.levels[fam.id] or {}
 	for _, line in ipairs(fam.lines) do
 		local old, new = vu_level(fam.id, line.key), p.levels[line.key] or 0
@@ -359,6 +410,7 @@ local function vu_refresh_panel()
 	VU.assign, VU.layout_for = assign, fam.id
 	for i, line in ipairs(fam.lines) do
 		local nd = assign[i]
+		if VU_DEBUG then vu_log("refresh:", line.key, "level", p.levels[line.key] or 0, "node", nd and nd.key, "icon", line.icon) end
 		if nd then
 			shown[nd.key] = true
 			VU.node_line[nd.key] = line
@@ -407,6 +459,7 @@ local function vu_refresh_panel()
 	for _, a in ipairs(VU.arrows or {}) do pcall(function() UIComponent(a):SetVisible(false) end) end
 	vu_guard("refresh retrain", vu_refresh_retrain, fam)
 	vu_audit("tree")
+	if VU_DEBUG then vu_log("refresh: done", fam.id) end
 end
 
 local VU_HEADERS = { "leadership", "ranged", "physical", "melee" }
@@ -777,6 +830,19 @@ local function vu_open(fam, from_list)
 	VU.panel:SetVisible(true)
 	vu_refresh_panel()
 	vu_log("panel opened for", fam.id, "points", vu_points(fam.id), from_list and "(from list)" or "")
+	if VU_DEBUG then
+		vu_log("family:", fam.id, "player", VU.player, "recruitable here", fam.faction_set[VU.player] == true,
+			"units", table.concat(fam.units, ","), "abilities", table.concat(fam.abilities, ","))
+		for _, line in ipairs(fam.lines) do
+			vu_log("  line", line.key, "kind", line.kind, "owned", vu_level(fam.id, line.key), "/", #line.levels,
+				"bundle(1)", line.levels[1].bundle, "gated", line.gated)
+		end
+		for _, copy in ipairs(fam.copies) do
+			local st = {}
+			for _, k in ipairs({ copy.base, unpack(copy.keys) }) do st[#st + 1] = k .. "=" .. tostring(VU.locked and VU.locked[k]) end
+			vu_log("  locks", table.concat(st, " "), "prelocked", VU.prelocked)
+		end
+	end
 end
 
 -- OK / Cancel: in a tree they apply / discard, then return to the list if that's where we came from.
@@ -1056,7 +1122,7 @@ end
 -- Lock every version of the family's units except the current target, for the player only.
 local function vu_apply_recruitment(fam, refresh)
 	if not VU.player or #fam.copies == 0 then return end
-	local gi = EpisodicScripting.game_interface
+	local gi = vu_gi()
 	local mask = vu_mask(fam, vu_committed_levels(fam))
 	VU.locked = VU.locked or {}
 	local changed = false
@@ -1214,7 +1280,7 @@ end
 local function vu_retrain(fam)
 	local armies = vu_retrain_candidates(fam)
 	if #armies == 0 then vu_log("retrain:", fam.id, "nothing to retrain", VU.retrain_why or "") return end
-	local gi = EpisodicScripting.game_interface
+	local gi = vu_gi()
 	for _, army in ipairs(armies) do
 		local x, y, name = army.x, army.y, army.name
 		if not x then x, y, name = vu_army_position(army.char) end
@@ -1240,7 +1306,7 @@ VU_RETRAIN_CANDIDATES, VU_RETRAIN = vu_retrain_candidates, vu_retrain
 
 VU_PRELOCK = function()
 	if VU.prelocked then return end   -- LoadingGame and NewCampaignStarted both fire on a new campaign
-	local gi, n = EpisodicScripting.game_interface, 0
+	local gi, n = EpisodicScripting.game_interface, 0   -- untraced: thousands of calls at campaign start
 	for _, fam in ipairs(VU_FAMILIES) do
 		for _, copy in ipairs(fam.copies) do
 			for _, key in ipairs(copy.keys) do
@@ -1269,6 +1335,11 @@ local function VU_OnFactionTurnStart(context)
 		end
 		if conditions.FactionIsHuman(context.string, context) then
 			VU.player = context.string
+			if VU_DEBUG and not VU.debug_granted and not VU_UNDER_TEST then   -- debug builds: points to reproduce bugs without battles
+				VU.debug_granted = true
+				VU.pool = (VU.pool or 0) + 100
+				vu_log("DEBUG: granted 100 points, pool", VU.pool)
+			end
 			if not VU.recruit_applied then
 				VU.recruit_applied = true
 				VU_LOCK_ALL()   -- no-op for keys already locked at campaign start
@@ -1348,7 +1419,7 @@ end
 vu_ai_spend = function(faction)
 	local clan = VU.ai and VU.ai[faction]
 	if not clan or clan.pool <= 0 then return end
-	local gi = EpisodicScripting.game_interface
+	local gi = vu_gi()
 	while true do
 		local best, best_fam, best_cost, best_owned
 		for _, fam in ipairs(VU_FAMILIES) do
@@ -1454,7 +1525,13 @@ local function VU_OnTimeTrigger(context)
 	vu_guard("click", function()
 		local c = VU.click
 		VU.click = nil
-		if c then vu_handle_click(c.addr, c.id) end
+		if not c then return end
+		if VU_DEBUG then
+			vu_log("click:", c.id, "mode", VU.mode, "family", VU.pending and VU.pending.fam.id,
+				"points", VU.pending and VU.pending.points, "retrain armed", VU.retrain_armed)
+		end
+		vu_handle_click(c.addr, c.id)
+		if VU_DEBUG then vu_log("click handled:", c.id) end
 	end)
 end
 

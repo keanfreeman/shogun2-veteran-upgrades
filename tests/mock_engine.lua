@@ -25,7 +25,11 @@ function gi:add_time_trigger(name, t) MOCK.triggers[#MOCK.triggers + 1] = name e
 EpisodicScripting = {
 	game_interface = gi,
 	AddEventCallBack = function(ev, fn) handlers[ev] = handlers[ev] or {} table.insert(handlers[ev], fn) end,
+	SetCampaign = function(campaign) MOCK.campaign = campaign end,
 }
+package.loaded["EpisodicScripting"] = EpisodicScripting   -- the hook in export_advice requires it
+-- CA's export_advice.lua adds its advice triggers to the lists in data.events.
+package.loaded["data.events"] = setmetatable({}, { __index = function(t, k) local l = {} rawset(t, k, l) return l end })
 
 -- Fake UI tree ---------------------------------------------------------------
 MOCK.C = {}

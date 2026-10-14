@@ -8,8 +8,19 @@ Linux/Proton) unless marked otherwise.
   sorted order; an unsorted index (e.g. `db\x` listed after `text\y`) crashes at launch.
 - Separately named DB table files **merge** with vanilla (`db\units_tables\my_file`); no need to
   copy the whole vanilla table.
-- A `.loc` file with a vanilla name replaces the vanilla one, so include the vanilla rows.
-- `unique_index` of new unit records: free slots inside the vanilla range work.
+- A `.loc` file with a vanilla name replaces the vanilla one. Separately named `.loc` files merge
+  (MoSS names its new artillery only in `text\db\yogi_art_units.loc`), so ship only your own rows
+  under your own file name; a full copy wipes out other mods' texts. (Which file wins for a key that
+  exists in both is untested.)
+- `unique_index` of new unit records: free slots inside the vanilla range work, but overhauls fill
+  them too (MoSS takes 1406-1461 and uses values up to 15003); Veteran Upgrades uses 31000+.
+
+## Campaign scripts
+- Every campaign `scripting.lua` (CA's and MoSS's) does `require "export_advice"` and then
+  `scripting.SetCampaign("<campaign>")`; nothing else requires `export_advice`. Veteran Upgrades
+  appends its code to `export_advice.lua` and wraps `EpisodicScripting.SetCampaign`, so it runs
+  with any campaign script instead of replacing one. A mod that replaces `export_advice.lua` (e.g.
+  an advisor mod) would still conflict.
 
 ## Effects and abilities
 - Effect bundles with `unit_record` bonus effects work per unit type: `accuracy_mod`,
@@ -50,8 +61,8 @@ reversed.
 - `save_named_value` is only known to work with numbers and booleans.
 
 ## Lua and UI rules
-- The campaign `scripting.lua` main chunk allows at most **200 local variables** (Lua 5.1). Code
-  appended to vanilla's script must run inside its own function or the whole script fails to load
+- A Lua 5.1 function (including a script's main chunk) allows at most **200 local variables**. Code
+  appended to a vanilla script must run inside its own function or the whole script fails to load
   (no intro, wrong camera).
 - In event handlers, **do almost nothing for events that aren't yours.** Walking a clicked
   component's parents, or querying its state, in `ComponentLClickUp` left later handlers for the
