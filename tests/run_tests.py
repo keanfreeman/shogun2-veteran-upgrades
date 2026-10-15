@@ -157,7 +157,7 @@ def run_mp():
     fire(ms, "FactionTurnStart", "{ string = 'chosokabe' }")
     same(ms, "AI turn")
     fire(ms, "FactionTurnStart", "{ string = 'oda' }")
-    check(names(host, "oda") == ["Yari Ashigaru"] * 4, f"unit names restored ({names(host, 'oda')})")
+    check(names(host, "oda") == [""] * 4, f"unit names restored ({names(host, 'oda')})")
     fire(ms, "FactionTurnEnd", "{ string = 'oda' }")
     same(ms, "quiet turn")
 

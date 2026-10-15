@@ -129,7 +129,7 @@ Component = {
 
 CampaignUI = {
 	IsMultiplayer = MOCK_MP ~= nil and function() return MOCK_MP end or nil,
-	RegimentName = function(u) return MOCK.names[u] or "Regiment" end,
+	RegimentName = function(u) return MOCK.names[u] or "" end,   -- units have no custom name by default
 	SetMyUnitName = function(u, name) MOCK.sent[#MOCK.sent + 1] = { u = u, name = name } end,
 	PlayerFactionId = function() return MOCK.player end,
 	InitialiseUnitDetails = function(u) return MOCK.unit_details[u] end,

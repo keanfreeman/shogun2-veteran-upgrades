@@ -1441,9 +1441,6 @@ local VU_B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
 local function vu_b36(n) n = math.max(0, math.min(35, math.floor(n))) return string.sub(VU_B36, n + 1, n + 1) end
 local function vu_unb36(c) local i = c and c ~= "" and string.find(VU_B36, c, 1, true) return i and i - 1 end
 
-local VU_UNIT_FAM = {}   -- unit key (plain or copy) -> family, to name a unit after a reload
-for _, fam in ipairs(VU_FAMILIES) do for _, k in ipairs(fam.all_keys) do VU_UNIT_FAM[k] = fam end end
-
 -- A human clan's applied state, identical on every machine.
 vu_hum = function(faction)
 	VU.hum = VU.hum or {}
@@ -1495,14 +1492,10 @@ local function vu_mp_units(faction)
 	return out
 end
 
+-- Units have no custom name unless renamed (RegimentName is "" in a 1.1.0 multiplayer log), so a name
+-- not recorded this session (renamed before a reload) goes back to "".
 local function vu_mp_original_name(u)
-	local o = VU.orig_names and VU.orig_names[addr_key(u.addr)]
-	if o then return o end
-	-- Renamed before a reload: name it after its unit type.
-	local d
-	pcall(function() d = CampaignUI.InitialiseUnitDetails(u.addr) end)
-	local fam = d and d.UnitRecord and VU_UNIT_FAM[d.UnitRecord.Key]
-	return fam and fam.name or ""
+	return VU.orig_names and VU.orig_names[addr_key(u.addr)] or ""
 end
 
 local function vu_mp_rename(u, name)

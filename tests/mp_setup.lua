@@ -17,7 +17,7 @@ for faction, armies in pairs(MOCK.forces) do
 		units[i] = u
 		MOCK.unit_details[u] = { UnitRecord = { Key = MOCK.yari_key }, Experience = 0, Men = 160,
 			CharacterPtr = i == 1 and armies[1].Address or nil }
-		MOCK.names[u] = "Yari Ashigaru"
+		MOCK.names[u] = ""
 	end
 	MOCK.force_units[armies[1].Address] = units
 end
