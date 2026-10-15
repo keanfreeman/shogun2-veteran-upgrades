@@ -121,7 +121,7 @@ def run_mp():
     fire(ms, "UICreated", "{ string = 'Campaign UI', component = MOCK.root }")
     fire(ms, "FactionTurnStart", "{ string = 'shimazu' }")
     check(host.eval("MOCK.find('vu_button') ~= nil") and guest.eval("MOCK.find('vu_button') ~= nil"), "Veterans button on both machines")
-    battle(ms, "shimazu", n=8)
+    battle(ms, "shimazu", n=12)   # enough for an ability in either edition
     battle(ms, "oda", n=6)
     battle(ms, "chosokabe", human=False, n=2)
     same(ms, "after battles")
