@@ -1,6 +1,6 @@
 # Changelog
 
-## 1.2.0 (unreleased: multiplayer not yet tested on two machines)
+## 1.2.0 (2026-10-15)
 - Multiplayer campaigns: every player's upgrades now stick. Up to 1.1.0 a purchase changed only the
   buyer's game, the game resynced from the host at the end of the turn, and a guest's upgrades
   vanished. Purchases are now sent to every player (in the names of a few of the buyer's units) and
