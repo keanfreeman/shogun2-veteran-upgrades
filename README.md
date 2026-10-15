@@ -12,6 +12,8 @@ Samurai and Fall of the Samurai.
   in any combination.
 - **Retrain** existing units to give them new abilities (one army, or all armies at once).
 - **AI clans** earn points the same way and buy stat upgrades.
+- **Multiplayer campaigns:** each player has their own points; purchases take effect for everyone
+  when the buyer ends the turn.
 
 Players: get it from the Steam Workshop (link TBD). Start a new campaign after enabling it.
 
@@ -26,6 +28,11 @@ effect bundles applied to your faction, covering the originals and all copies.
 The code is appended to CA's `export_advice.lua`, which every campaign script loads, and starts when
 the campaign script calls `SetCampaign`. The mod ships no `scripting.lua`, so it works alongside
 overhauls that replace it (such as Master of Strategy Sengoku).
+
+In multiplayer the game runs every player's campaign in lockstep, and changes made from a click
+would exist on one machine only. So a purchase is sent as a game command - the buyer's machine
+renames a few of its units with the purchase data - and every machine reads those names and applies
+the purchase at the buyer's turn end. Details are in the "Multiplayer campaigns" part of `vu.lua`.
 
 [`docs/ENGINE_NOTES.md`](docs/ENGINE_NOTES.md) lists what we learned about the engine, including
 the things that crash it.
@@ -67,7 +74,8 @@ The mod always writes a short `vu_log.txt` (purchases, battles, errors).
 ## Testing
 
 `tests/run_tests.py` loads the built pack's `export_advice.lua` against a mock of the campaign scripting API
-(`tests/mock_engine.lua`): the full flows on Sengoku and a smoke test on every campaign. It can't
+(`tests/mock_engine.lua`): the full flows on Sengoku, a smoke test on every campaign, and a
+multiplayer campaign on two mock machines in lockstep that must stay identical. It can't
 catch engine crashes, so changes still need a play test, ideally with `PROTON_LOG=1` / a debugger
 for native crashes.
 

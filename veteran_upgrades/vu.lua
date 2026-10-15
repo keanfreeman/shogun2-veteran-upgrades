@@ -9,6 +9,8 @@
 --   * Buy:    click upgrade nodes (staged); OK applies, Cancel discards, Reset refunds everything.
 --   * Abilities: each combination is a unit copy; the clan recruits the copy matching its unlocks,
 --             and Retrain (in the tree, with an army selected) swaps that army's units for it.
+--   * Multiplayer campaigns: purchases are sent to the other machines and take effect when the
+--             buyer ends the turn (see "Multiplayer campaigns" below).
 -- VU_FAMILIES and VU_START_POINTS are generated above this file by build.py.
 -- Log: vu_log.txt in the game folder.
 -------------------------------------------------------------------------------
@@ -101,9 +103,27 @@ for _, fam in ipairs(VU_FAMILIES) do
 	for _, n in ipairs(fam.names) do VU_BY_NAME[n] = fam end
 end
 
+local VU_FAM_INDEX = {}   -- family id -> position in VU_FAMILIES (multiplayer messages name families by it)
+for i, fam in ipairs(VU_FAMILIES) do VU_FAM_INDEX[fam.id] = i - 1 end
+
+-- Multiplayer campaign? (CampaignUI only exists once the campaign UI is up; until then: no.)
+local function vu_is_mp()
+	if VU.mp == nil then
+		local ok, r = pcall(function() return CampaignUI.IsMultiplayer() end)
+		if ok and r ~= nil then VU.mp = r == true end
+	end
+	return VU.mp == true
+end
+
 -- One clan-wide pool: the clan earns points per battle and spends them on any unit type.
-local function vu_points(fam_id) return VU.pool or 0 end
+-- In multiplayer the local player's view also counts purchases not yet sent (VU.outbox).
+local vu_mp_view_points, vu_mp_view_level, vu_hum, vu_mp_send, vu_mp_settle_legacy   -- defined with the multiplayer code below
+local function vu_points(fam_id)
+	if vu_is_mp() then return vu_mp_view_points() end
+	return VU.pool or 0
+end
 local function vu_level(fam_id, line_key)
+	if vu_is_mp() then return vu_mp_view_level(fam_id, line_key) end
 	return (VU.levels[fam_id] and VU.levels[fam_id][line_key]) or 0
 end
 
@@ -180,9 +200,11 @@ local function vu_pending_reset()
 end
 
 local VU_AFTER_COMMIT   -- set by the recruitment code below
+local vu_mp_commit      -- set by the multiplayer code below
 local function vu_commit()
 	local p = VU.pending
 	if not p then return end
+	if vu_is_mp() then vu_mp_commit(p) return end   -- sent now, applied on every machine at turn end
 	local fam, gi = p.fam, vu_gi()
 	VU.levels[fam.id] = VU.levels[fam.id] or {}
 	for _, line in ipairs(fam.lines) do
@@ -226,7 +248,8 @@ end
 -- Bottom bar: "<context> - points to spend:" and the clan pool, in the popup's own points display.
 local function vu_set_buttons(tree, fam)
 	local tips = tree and {
-		button_ok = "Confirm\nApply the upgrades chosen for " .. fam.name .. " and return to the list.",
+		button_ok = "Confirm\nApply the upgrades chosen for " .. fam.name .. " and return to the list."
+			.. (vu_is_mp() and "\nMultiplayer: they take effect when you end your turn." or ""),
 		button_cancel = "Cancel\nDiscard the changes made here (nothing is charged) and return to the list.",
 	} or {
 		button_ok = "Close", button_cancel = "Close",
@@ -244,6 +267,9 @@ local function vu_set_header(context_text, points)
 	local txt = vu_child(dy, "points_txt")
 	vu_set_text(txt, "Points to spend:")
 	local tip = string.format("Clan points: %d\nYour clan earns 1 point for every battle its units fight in,\nand can spend them on any unit type.", points)
+	if vu_is_mp() then
+		tip = tip .. "\nMultiplayer: upgrades take effect when you end your turn." .. (VU.mp_problem and ("\n" .. VU.mp_problem) or "")
+	end
 	for _, a in ipairs({ dy, txt }) do
 		if a then pcall(function() UIComponent(a):SetTooltipText(tip, true) end) end
 	end
@@ -839,7 +865,8 @@ local function vu_open(fam, from_list)
 		end
 		for _, copy in ipairs(fam.copies) do
 			local st = {}
-			for _, k in ipairs({ copy.base, unpack(copy.keys) }) do st[#st + 1] = k .. "=" .. tostring(VU.locked and VU.locked[k]) end
+			local locked = VU.locked_by and VU.locked_by[VU.player]
+			for _, k in ipairs({ copy.base, unpack(copy.keys) }) do st[#st + 1] = k .. "=" .. tostring(locked and locked[k]) end
 			vu_log("  locks", table.concat(st, " "), "prelocked", VU.prelocked)
 		end
 	end
@@ -1002,9 +1029,10 @@ local function VU_OnUICreated(context)
 		VU.node_line, VU.node_fam, VU.bounds_logged = {}, {}, nil
 		VU.mode, VU.open_family, VU.pending, VU.from_list = nil, nil, nil, false
 		pcall(function() VU.player = CampaignUI.PlayerFactionId() end)
+		vu_guard("mp legacy", vu_mp_settle_legacy, nil)
 		VU.button, VU.layout_for = nil, nil
 		VU.retrain_node, VU.retrain_armed, VU.title_node, VU.page_node, VU.list_page = nil, false, nil, nil, 1
-		vu_log("==== Veteran Upgrades " .. VU_VERSION .. " loaded; player", tostring(VU.player), "====")
+		vu_log("==== Veteran Upgrades " .. VU_VERSION .. " loaded; player", tostring(VU.player), vu_is_mp() and "(multiplayer)" or "", "====")
 		vu_guard("create hud button", vu_create_hud_button)
 		if VU.panel then VU.panel:SetVisible(false) end
 	end)
@@ -1026,13 +1054,62 @@ end
 
 local vu_ai_spend, vu_ai_clan   -- defined with the points code below
 
+-- Multiplayer: every human clan's applied state (VU_MP marks the format; single-player saves keep the
+-- old keys, so they still load in older versions). Unsent purchases aren't saved.
+local function vu_save_humans(gi, context)
+	gi:save_named_value("VU_MP", 1, context)
+	local n = 0
+	for _, faction in ipairs(VU_FACTIONS) do
+		local h = VU.hum and VU.hum[faction]
+		if h then
+			n = n + 1
+			gi:save_named_value("VU_H_" .. faction, 1, context)
+			gi:save_named_value("VU_HPOOL_" .. faction, h.pool, context)
+			gi:save_named_value("VU_HSEQ_" .. faction, h.seq, context)
+			for _, fam in ipairs(VU_FAMILIES) do
+				local lv = h.levels[fam.id] or {}
+				for _, line in ipairs(fam.lines) do
+					if (lv[line.key] or 0) > 0 then gi:save_named_value("VU_HL_" .. faction .. "__" .. fam.id .. "__" .. line.key, lv[line.key], context) end
+				end
+			end
+		end
+	end
+	return n
+end
+
+local function vu_load_humans(gi, context)
+	VU.hum = {}
+	local n = 0
+	for _, faction in ipairs(VU_FACTIONS) do
+		if gi:load_named_value("VU_H_" .. faction, 0, context) == 1 then
+			n = n + 1
+			local h = vu_hum(faction)
+			h.pool = gi:load_named_value("VU_HPOOL_" .. faction, VU_START_POINTS, context)
+			h.seq = gi:load_named_value("VU_HSEQ_" .. faction, 0, context)
+			for _, fam in ipairs(VU_FAMILIES) do
+				local lv = {}
+				for _, line in ipairs(fam.lines) do
+					local l = gi:load_named_value("VU_HL_" .. faction .. "__" .. fam.id .. "__" .. line.key, 0, context)
+					if l > 0 then lv[line.key] = l end
+				end
+				if next(lv) then h.levels[fam.id] = lv end
+			end
+		end
+	end
+	return n
+end
+
 local function VU_OnSavingGame(context)
 	vu_guard("SavingGame", function()
 		local gi = EpisodicScripting.game_interface
-		gi:save_named_value("VU_POOL", VU.pool or 0, context)
-		for _, fam in ipairs(VU_FAMILIES) do
-			for _, line in ipairs(fam.lines) do
-				gi:save_named_value("VU_L_" .. fam.id .. "__" .. line.key, vu_level(fam.id, line.key), context)
+		if vu_is_mp() and not VU.legacy_mp then   -- an older save not yet refunded keeps its format
+			vu_log("saved", vu_save_humans(gi, context), "human clans (multiplayer)")
+		else
+			gi:save_named_value("VU_POOL", VU.pool or 0, context)
+			for _, fam in ipairs(VU_FAMILIES) do
+				for _, line in ipairs(fam.lines) do
+					gi:save_named_value("VU_L_" .. fam.id .. "__" .. line.key, vu_level(fam.id, line.key), context)
+				end
 			end
 		end
 		-- AI clans: a flag per clan, its pool, and per unit type it has fought with the levels packed
@@ -1058,12 +1135,20 @@ end
 local function VU_OnLoadingGame(context)
 	vu_guard("LoadingGame", function()
 		local gi = EpisodicScripting.game_interface
-		VU.pool = gi:load_named_value("VU_POOL", VU.pool or VU_START_POINTS, context)
-		for _, fam in ipairs(VU_FAMILIES) do
-			VU.levels[fam.id] = {}
-			for _, line in ipairs(fam.lines) do
-				VU.levels[fam.id][line.key] = gi:load_named_value("VU_L_" .. fam.id .. "__" .. line.key, 0, context)
+		VU.legacy, VU.legacy_mp = nil, nil
+		if gi:load_named_value("VU_MP", 0, context) == 1 then
+			vu_log("loaded", vu_load_humans(gi, context), "human clans (multiplayer)")
+		else
+			VU.pool = gi:load_named_value("VU_POOL", VU.pool or VU_START_POINTS, context)
+			for _, fam in ipairs(VU_FAMILIES) do
+				VU.levels[fam.id] = {}
+				for _, line in ipairs(fam.lines) do
+					VU.levels[fam.id][line.key] = gi:load_named_value("VU_L_" .. fam.id .. "__" .. line.key, 0, context)
+				end
 			end
+			-- Single-player format: if this turns out to be a multiplayer campaign, vu_mp_settle_legacy
+			-- refunds it (CampaignUI.IsMultiplayer isn't available yet).
+			VU.legacy = { pool = VU.pool, levels = VU.levels }
 		end
 		VU.ai = {}
 		local n = 0
@@ -1119,12 +1204,16 @@ end
 
 -- Per-clan locks are queued and take effect at the next turn change. (Toggling the global restriction
 -- applies them at once, but left the game crashing on the next character selection, v0.12l.)
--- Lock every version of the family's units except the current target, for the player only.
-local function vu_apply_recruitment(fam, refresh)
-	if not VU.player or #fam.copies == 0 then return end
+-- Lock every version of the family's units except the current target, for one clan (default: the
+-- local player, with its committed levels; multiplayer passes the clan and its applied levels).
+local function vu_apply_recruitment(fam, refresh, faction, levels)
+	faction = faction or VU.player
+	if not faction or #fam.copies == 0 then return end
 	local gi = vu_gi()
-	local mask = vu_mask(fam, vu_committed_levels(fam))
-	VU.locked = VU.locked or {}
+	local mask = vu_mask(fam, levels or vu_committed_levels(fam))
+	VU.locked_by = VU.locked_by or {}
+	VU.locked_by[faction] = VU.locked_by[faction] or {}
+	local locked = VU.locked_by[faction]
 	local changed = false
 	for _, copy in ipairs(fam.copies) do
 		local target = vu_target(copy, mask)
@@ -1134,18 +1223,18 @@ local function vu_apply_recruitment(fam, refresh)
 			local lock = key ~= target
 			-- First pass in a session (was == nil): only lock. A key that should stay recruitable is
 			-- either never locked (new campaign) or still unlocked in the save, so it needs no call.
-			local was = VU.locked[key]
+			local was = locked[key]
 			if was == nil and VU.prelocked and key ~= copy.base then was = true end   -- locked for every clan
-			if was == nil and not lock then VU.locked[key] = false was = false end
+			if was == nil and not lock then locked[key] = false was = false end
 			if was ~= lock then
-				if lock then gi:add_event_restricted_unit_record_for_faction(key, VU.player)
-				else gi:remove_event_restricted_unit_record_for_faction(key, VU.player) end
-				VU.locked[key] = lock
+				if lock then gi:add_event_restricted_unit_record_for_faction(key, faction)
+				else gi:remove_event_restricted_unit_record_for_faction(key, faction) end
+				locked[key] = lock
 				changed = true
 			end
 		end
 	end
-	vu_log("recruitment:", fam.id, "ability mask", mask)
+	vu_log("recruitment:", fam.id, faction, "ability mask", mask)
 	-- No immediate refresh: toggling the global restriction (vu_refresh_recruitment) left the game
 	-- crashing on the next character selection (v0.12l). Changes apply at the next turn change.
 end
@@ -1296,10 +1385,13 @@ local function vu_retrain(fam)
 			for _, r in ipairs(army.rows) do
 				vu_log("retrain: disband", r.from, "(experience", r.xp .. ")")
 				CampaignUI.DisbandUnit(r.unit)
+				VU.doomed = VU.doomed or {}
+				VU.doomed[addr_key(r.unit)] = true   -- multiplayer: no message on a unit that's going
 			end
 		end
 	end
 	vu_log("retrain: done")
+	if vu_is_mp() then vu_mp_send() end
 end
 
 VU_RETRAIN_CANDIDATES, VU_RETRAIN = vu_retrain_candidates, vu_retrain
@@ -1327,12 +1419,346 @@ end
 
 VU_AFTER_COMMIT = function(fam) vu_guard("recruitment " .. fam.id, vu_apply_recruitment, fam, true) end
 
+-------------------------------------------------------------------------------
+-- Multiplayer campaigns. The game keeps every player's campaign in lockstep: game events (turn
+-- start/end, battles) run these scripts on every machine at the same point, but a click in our panel
+-- runs on one machine only. Up to 1.1.0 a purchase applied its bundles from the click, so only the
+-- buyer's game changed; the end-of-turn check found the games out of sync and the game resynced
+-- everyone from the host (the guest's upgrades vanished, the host's were kept).
+-- Now a confirmed purchase is only sent, and every machine applies it at the same point:
+--   * send (buyer's machine): the purchases of this turn (VU.outbox) are written into the names of
+--     some of the buyer's units with CampaignUI.SetMyUnitName - renaming a unit is a game command,
+--     which the game delivers to every machine in order. Name = "VU" .. seq .. part .. parts .. data.
+--   * receive (every machine, at the buyer's FactionTurnEnd): read that clan's unit names
+--     (RegimentName), apply the newest complete message (bundles, copy locks, points) to the clan.
+--   * the buyer's machine puts the units' names back at its next turn start.
+-- Each human clan's points and upgrades (VU.hum) are therefore the same on every machine; points come
+-- from battles (grouped by game events, not the clock - see VU_OnUnitCompletedBattle). Only the local
+-- player's unsent purchases (VU.outbox) differ, and the panel shows them as owned.
+-------------------------------------------------------------------------------
+local VU_MP_CHUNK = 24   -- data characters per unit name (plus the 5-character "VU" header)
+local VU_B36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+local function vu_b36(n) n = math.max(0, math.min(35, math.floor(n))) return string.sub(VU_B36, n + 1, n + 1) end
+local function vu_unb36(c) local i = c and c ~= "" and string.find(VU_B36, c, 1, true) return i and i - 1 end
+
+local VU_UNIT_FAM = {}   -- unit key (plain or copy) -> family, to name a unit after a reload
+for _, fam in ipairs(VU_FAMILIES) do for _, k in ipairs(fam.all_keys) do VU_UNIT_FAM[k] = fam end end
+
+-- A human clan's applied state, identical on every machine.
+vu_hum = function(faction)
+	VU.hum = VU.hum or {}
+	local h = VU.hum[faction]
+	if not h then h = { pool = VU_START_POINTS, levels = {}, seq = 0 } VU.hum[faction] = h end
+	return h
+end
+
+vu_mp_view_level = function(fam_id, line_key)
+	local o = VU.outbox and VU.outbox[fam_id]
+	if o then return o.levels[line_key] or 0 end
+	local lv = VU.player and vu_hum(VU.player).levels[fam_id]
+	return (lv and lv[line_key]) or 0
+end
+
+vu_mp_view_points = function()
+	if not VU.player then return 0 end
+	local h = vu_hum(VU.player)
+	local pts = h.pool
+	for _, fam in ipairs(VU_FAMILIES) do
+		local o = VU.outbox and VU.outbox[fam.id]
+		if o then pts = pts - (vu_spent(fam, o.levels) - vu_spent(fam, h.levels[fam.id] or {})) - o.fee end
+	end
+	return pts
+end
+
+local function vu_mp_my_turn()
+	if VU.my_turn ~= nil then return VU.my_turn end
+	local ok, r = pcall(function() return CampaignUI.IsPlayersTurn() end)   -- loaded mid-turn
+	return ok and r == true
+end
+
+local function vu_mp_name_parts(name)
+	return string.match(tostring(name or ""), "^VU(%w)(%w)(%w)(%w*)$")
+end
+
+-- The clan's units in its armies (those with a general), in army order: { { addr, name } }.
+local function vu_mp_units(faction)
+	local out = {}
+	for _, f in ipairs(CampaignUI.RetrieveFactionMilitaryForceLists(faction, true) or {}) do
+		if f.Address then
+			for _, unit in ipairs(vu_army_units(f.Address)) do
+				local name = ""
+				pcall(function() name = tostring(CampaignUI.RegimentName(unit) or "") end)
+				out[#out + 1] = { addr = unit, name = name }
+			end
+		end
+	end
+	return out
+end
+
+local function vu_mp_original_name(u)
+	local o = VU.orig_names and VU.orig_names[addr_key(u.addr)]
+	if o then return o end
+	-- Renamed before a reload: name it after its unit type.
+	local d
+	pcall(function() d = CampaignUI.InitialiseUnitDetails(u.addr) end)
+	local fam = d and d.UnitRecord and VU_UNIT_FAM[d.UnitRecord.Key]
+	return fam and fam.name or ""
+end
+
+local function vu_mp_rename(u, name)
+	VU.orig_names = VU.orig_names or {}
+	local k = addr_key(u.addr)
+	if not vu_mp_name_parts(u.name) and VU.orig_names[k] == nil then VU.orig_names[k] = u.name end
+	CampaignUI.SetMyUnitName(u.addr, name)
+	u.name = name
+end
+
+-- This turn's purchases, per family: index (2), fee (1), changed lines (1), then line index + level
+-- pairs - absolute levels, so a message can be applied twice without harm.
+local function vu_mp_payload(h)
+	local parts = {}
+	for i, fam in ipairs(VU_FAMILIES) do
+		local o = VU.outbox and VU.outbox[fam.id]
+		if o then
+			local applied, changed = h.levels[fam.id] or {}, {}
+			for li, line in ipairs(fam.lines) do
+				local lv = o.levels[line.key] or 0
+				if lv ~= (applied[line.key] or 0) then changed[#changed + 1] = vu_b36(li - 1) .. vu_b36(lv) end
+			end
+			if #changed > 0 or o.fee > 0 then
+				parts[#parts + 1] = vu_b36((i - 1) / 36) .. vu_b36((i - 1) % 36) .. vu_b36(o.fee) .. vu_b36(#changed) .. table.concat(changed)
+			end
+		end
+	end
+	return table.concat(parts)
+end
+
+-- Write this turn's purchases into unit names (or clear old ones). Local player, own turn only.
+vu_mp_send = function()
+	if not VU.player then return end
+	if not vu_mp_my_turn() then vu_log("mp: not your turn - purchases are sent at your next turn start") return end
+	local h = vu_hum(VU.player)
+	local data = vu_mp_payload(h)
+	local chunks = {}
+	for i = 1, #data, VU_MP_CHUNK do chunks[#chunks + 1] = string.sub(data, i, i + VU_MP_CHUNK - 1) end
+	local units = {}
+	for _, u in ipairs(vu_mp_units(VU.player)) do
+		if not (VU.doomed and VU.doomed[addr_key(u.addr)]) then units[#units + 1] = u end
+	end
+	if #chunks > 35 or #chunks > #units then
+		VU.mp_problem = string.format("Can't send your upgrades: they need %d units in armies with a general (you have %d).", #chunks, #units)
+		vu_log("mp:", VU.mp_problem)
+		return
+	end
+	VU.mp_problem = nil
+	-- A new number for every send (counting on across turns, so a leftover older message can't look
+	-- newer), never the one last applied (receivers skip that one).
+	VU.send_seq = ((VU.send_seq or h.seq) + 1) % 36
+	if VU.send_seq == h.seq then VU.send_seq = (VU.send_seq + 1) % 36 end
+	local seq, restored = vu_b36(VU.send_seq), 0
+	for i, u in ipairs(units) do
+		if i <= #chunks then
+			vu_mp_rename(u, "VU" .. seq .. vu_b36(i - 1) .. vu_b36(#chunks) .. chunks[i])
+		elseif vu_mp_name_parts(u.name) then
+			vu_mp_rename(u, vu_mp_original_name(u))   -- part of an earlier message
+			restored = restored + 1
+		end
+	end
+	VU.sent_seq = #chunks > 0 and VU.send_seq or nil
+	if #chunks > 0 or restored > 0 then
+		vu_log("mp: sent", #data, "characters in", #chunks, "unit names, seq", seq, data, "| names put back:", restored)
+	end
+end
+
+vu_mp_commit = function(p)
+	local fam = p.fam
+	local h = vu_hum(VU.player)
+	local view = {}
+	for _, l in ipairs(fam.lines) do view[l.key] = vu_level(fam.id, l.key) end
+	local fee = (vu_points() - p.points) - (vu_spent(fam, p.levels) - vu_spent(fam, view))   -- respec fee
+	VU.outbox = VU.outbox or {}
+	local o = VU.outbox[fam.id] or { levels = {}, fee = 0 }
+	for _, l in ipairs(fam.lines) do o.levels[l.key] = p.levels[l.key] or 0 end
+	o.fee = o.fee + math.max(0, fee)
+	local applied, same = h.levels[fam.id] or {}, o.fee == 0
+	for _, l in ipairs(fam.lines) do if o.levels[l.key] ~= (applied[l.key] or 0) then same = false end end
+	VU.outbox[fam.id] = (not same) and o or nil
+	vu_log("mp: purchase for", fam.id, "queued, fee", fee, "| points now", vu_points())
+	vu_mp_send()
+end
+
+-- Apply one family's new levels (only the lines given) and respec fee to a human clan.
+local function vu_mp_apply(faction, fam, new, fee)
+	local h = vu_hum(faction)
+	local gi = vu_gi()
+	local cur = h.levels[fam.id] or {}
+	local nxt = {}
+	for _, line in ipairs(fam.lines) do
+		local old, lv = cur[line.key] or 0, new[line.key] or cur[line.key] or 0
+		if old ~= lv then
+			if old > 0 and line.levels[old].bundle ~= "" then gi:remove_effect_bundle(line.levels[old].bundle, faction) end
+			if lv > 0 and line.levels[lv].bundle ~= "" then gi:apply_effect_bundle(line.levels[lv].bundle, faction, 0) end
+			vu_log("mp: COMMIT", faction, fam.id, line.key, old, "->", lv)
+		end
+		if lv > 0 then nxt[line.key] = lv end
+	end
+	h.pool = h.pool - (vu_spent(fam, nxt) - vu_spent(fam, cur)) - fee
+	h.levels[fam.id] = nxt
+	vu_apply_recruitment(fam, false, faction, nxt)
+end
+
+local function vu_mp_apply_message(faction, data)
+	local pos = 1
+	local function take() local c = string.sub(data, pos, pos) pos = pos + 1 return vu_unb36(c) end
+	while pos + 3 <= #data do
+		local idx = (take() or 0) * 36 + (take() or 0)
+		local fee, n = take() or 0, take() or 0
+		local fam, new = VU_FAMILIES[idx + 1], {}
+		for _ = 1, n do
+			local li, lv = take(), take()
+			local line = fam and li and fam.lines[li + 1]
+			if line and lv then new[line.key] = math.min(lv, #line.levels) end
+		end
+		if fam then vu_mp_apply(faction, fam, new, fee)
+		else vu_log("mp: !! message names an unknown unit type", idx, "- are both players on the same version?") end
+	end
+end
+
+-- Every machine, at a human clan's FactionTurnEnd: read and apply its newest message.
+-- Returns the applied message's number, or nil.
+local function vu_mp_receive(faction)
+	local h = vu_hum(faction)
+	local sets, found = {}, 0
+	for _, u in ipairs(vu_mp_units(faction)) do
+		local s, i, n, data = vu_mp_name_parts(u.name)
+		if s then
+			found = found + 1
+			local key = s .. n
+			sets[key] = sets[key] or { seq = vu_unb36(s), n = vu_unb36(n), parts = {} }
+			local idx = vu_unb36(i)
+			if idx then sets[key].parts[idx + 1] = data end
+		end
+	end
+	local best
+	for _, set in pairs(sets) do   -- the pick depends only on the sets, not on pairs() order
+		local complete = set.seq and set.n and set.n > 0
+		for c = 1, set.n or 0 do if not set.parts[c] then complete = false end end
+		if complete then
+			set.age = (set.seq - h.seq) % 36
+			if set.age > 0 and (not best or set.age > best.age or (set.age == best.age and set.n > best.n)) then best = set end
+		end
+	end
+	if not best then
+		if found > 0 then vu_log("mp:", faction, "has", found, "upgrade unit names but no new complete message") end
+		return nil
+	end
+	local data = table.concat(best.parts, "", 1, best.n)
+	vu_log("mp: applying", faction, "message seq", best.seq, data)
+	vu_mp_apply_message(faction, data)
+	h.seq = best.seq
+	return best.seq
+end
+
+-- Older saves of a multiplayer campaign hold one clan's upgrades with no owner (up to 1.1.0 they were
+-- the host's, in a pool fed by every player's battles), and no machine can tell whose. Refund them to
+-- every human clan as points: same result on every machine. Runs at the first game event with a
+-- context (FactionIsHuman needs one).
+vu_mp_settle_legacy = function(context)
+	if VU.legacy and vu_is_mp() then
+		local L = VU.legacy
+		local refund, any = L.pool or 0, false
+		for _, fam in ipairs(VU_FAMILIES) do
+			local s = vu_spent(fam, L.levels[fam.id] or {})
+			refund, any = refund + s, any or s > 0
+		end
+		VU.legacy_mp = (any or refund ~= VU_START_POINTS) and { refund = refund, levels = L.levels } or nil
+	end
+	if VU.mp ~= nil then VU.legacy = nil end
+	local L = VU.legacy_mp
+	if not L or not context then return end
+	VU.legacy_mp = nil
+	local gi = vu_gi()
+	for _, faction in ipairs(VU_FACTIONS) do
+		local ok, human = pcall(conditions.FactionIsHuman, faction, context)
+		if ok and human then
+			for _, fam in ipairs(VU_FAMILIES) do
+				local lv = L.levels[fam.id] or {}
+				for _, line in ipairs(fam.lines) do
+					local l = lv[line.key] or 0
+					if l > 0 and line.levels[l].bundle ~= "" then gi:remove_effect_bundle(line.levels[l].bundle, faction) end
+				end
+				if vu_mask(fam, lv) > 0 then   -- the plain units were locked for the owner
+					for _, copy in ipairs(fam.copies) do gi:remove_event_restricted_unit_record_for_faction(copy.base, faction) end
+				end
+			end
+			local h = vu_hum(faction)
+			h.pool, h.levels = L.refund, {}
+			vu_log("mp: upgrades from an older save refunded to", faction, "as", L.refund, "points")
+		end
+	end
+end
+
+-- A human clan's turn starts (every machine). Its copy locks get their first pass; the local player's
+-- machine then puts back unit names and sends anything still unsent (time trigger: after the event).
+local function vu_mp_turn_start(faction)
+	local h = vu_hum(faction)
+	VU.recruit_applied_by = VU.recruit_applied_by or {}
+	if not VU.recruit_applied_by[faction] then
+		VU.recruit_applied_by[faction] = true
+		for _, fam in ipairs(VU_FAMILIES) do
+			vu_guard("recruitment " .. fam.id, vu_apply_recruitment, fam, false, faction, h.levels[fam.id] or {})
+		end
+	end
+	VU.debug_granted_by = VU.debug_granted_by or {}
+	if VU_DEBUG and not VU_UNDER_TEST and not VU.debug_granted_by[faction] then   -- same on every machine
+		VU.debug_granted_by[faction] = true
+		h.pool = h.pool + 100
+		vu_log("DEBUG: granted 100 points to", faction, "pool", h.pool)
+	end
+	if faction ~= VU.player then return end
+	VU.my_turn, VU.doomed = true, {}
+	if not VU.button then vu_guard("create hud button", vu_create_hud_button)
+	else vu_guard("place hud button", vu_place_hud_button) end
+	EpisodicScripting.game_interface:add_time_trigger("vu_mp_turn", 0.5)
+end
+
+-- A human clan's turn ends (every machine).
+local function vu_mp_turn_end(faction)
+	local seq = vu_mp_receive(faction)
+	if faction ~= VU.player then return end
+	VU.my_turn = false
+	if seq and seq == VU.sent_seq then
+		VU.outbox = nil
+	elseif VU.outbox then
+		-- Not received (a named unit was lost, or it was sent out of turn): send again next turn,
+		-- minus whatever an older message already applied.
+		local h = vu_hum(VU.player)
+		for _, fam in ipairs(VU_FAMILIES) do
+			local o = VU.outbox[fam.id]
+			if o then
+				if seq then o.fee = 0 end
+				local applied, same = h.levels[fam.id] or {}, o.fee == 0
+				for _, l in ipairs(fam.lines) do if (o.levels[l.key] or 0) ~= (applied[l.key] or 0) then same = false end end
+				if same then VU.outbox[fam.id] = nil end
+			end
+		end
+		if next(VU.outbox) then vu_log("mp: purchases not received this turn; sending again next turn") end
+	end
+	VU.sent_seq = nil
+end
+
 local function VU_OnFactionTurnStart(context)
 	vu_guard("FactionTurnStart", function()
+		local mp = vu_is_mp()
+		if mp then
+			vu_guard("mp legacy", vu_mp_settle_legacy, context)
+			VU.battle_earned = {}   -- multiplayer battle grouping, see VU_OnUnitCompletedBattle
+		end
 		if not conditions.FactionIsHuman(context.string, context) then
 			vu_guard("AI spend " .. tostring(context.string), vu_ai_spend, context.string)
 			return
 		end
+		if mp then vu_guard("mp turn start", vu_mp_turn_start, context.string) return end
 		if conditions.FactionIsHuman(context.string, context) then
 			VU.player = context.string
 			if VU_DEBUG and not VU.debug_granted and not VU_UNDER_TEST then   -- debug builds: points to reproduce bugs without battles
@@ -1349,6 +1775,16 @@ local function VU_OnFactionTurnStart(context)
 			if not VU.button then vu_guard("create hud button", vu_create_hud_button)
 			else vu_guard("place hud button", vu_place_hud_button) end
 		end
+	end)
+end
+
+local function VU_OnFactionTurnEnd(context)
+	if not vu_is_mp() then return end
+	vu_guard("FactionTurnEnd", function()
+		vu_guard("mp legacy", vu_mp_settle_legacy, context)
+		local human = conditions.FactionIsHuman(context.string, context)
+		if human or VU_DEBUG then vu_log("mp: turn end", tostring(context.string), human and "(human)" or "") end
+		if human then vu_mp_turn_end(context.string) end
 	end)
 end
 
@@ -1388,15 +1824,29 @@ end
 local function VU_OnUnitCompletedBattle(context)
 	vu_guard("UnitCompletedBattle", function()
 		if not conditions.UnitFoughtInBattle(context) then return end   -- must have been used
-		local now = os.time()
-		if now - (VU.last_battle_t or 0) > VU_BATTLE_GAP then VU.battle_earned = {} end
-		VU.last_battle_t = now
+		local mp = vu_is_mp()
+		if mp then
+			-- The clock differs between machines, so multiplayer groups a battle's units by game events
+			-- instead: a new battle starts after any general's CharacterCompletedBattle or a turn start.
+			vu_guard("mp legacy", vu_mp_settle_legacy, context)
+			VU.battle_earned = VU.battle_earned or {}
+		else
+			local now = os.time()
+			if now - (VU.last_battle_t or 0) > VU_BATTLE_GAP then VU.battle_earned = {} end
+			VU.last_battle_t = now
+		end
 		local human = conditions.FactionIsHuman(context)
-		local faction = vu_unit_faction(context, human)
+		local faction = vu_unit_faction(context, human and not mp)
 		if not faction then return end
 		if human then
 			if VU.battle_earned[faction] then return end
 			VU.battle_earned[faction] = true
+			if mp then
+				local h = vu_hum(faction)
+				h.pool = h.pool + VU_POINTS_PER_BATTLE
+				vu_log("battle: +" .. VU_POINTS_PER_BATTLE, "clan points for", faction, "now", h.pool)
+				return
+			end
 			VU.pool = (VU.pool or 0) + VU_POINTS_PER_BATTLE
 			vu_log("battle: +" .. VU_POINTS_PER_BATTLE, "clan points, now", VU.pool)
 			return
@@ -1412,6 +1862,10 @@ local function VU_OnUnitCompletedBattle(context)
 			vu_log("battle (AI " .. faction .. "): +" .. VU_POINTS_PER_BATTLE, "now", clan.pool)
 		end
 	end)
+end
+
+local function VU_OnCharacterCompletedBattle(context)
+	if vu_is_mp() then VU.battle_earned = {} end
 end
 
 -- AI spending: repeatedly buy the cheapest affordable stat/passive upgrade among the unit types the
@@ -1521,6 +1975,7 @@ local function VU_OnComponentLClickUp(context)
 end
 
 local function VU_OnTimeTrigger(context)
+	if context.string == "vu_mp_turn" then vu_guard("mp send", vu_mp_send) return end
 	if context.string ~= "vu_click" then return end
 	vu_guard("click", function()
 		local c = VU.click
@@ -1541,7 +1996,9 @@ for _, reg in ipairs({
 	{ "SavingGame", VU_OnSavingGame },
 	{ "LoadingGame", VU_OnLoadingGame },
 	{ "FactionTurnStart", VU_OnFactionTurnStart },
+	{ "FactionTurnEnd", VU_OnFactionTurnEnd },
 	{ "UnitCompletedBattle", VU_OnUnitCompletedBattle },
+	{ "CharacterCompletedBattle", VU_OnCharacterCompletedBattle },
 	{ "ComponentLClickUp", VU_OnComponentLClickUp },
 	{ "TimeTrigger", VU_OnTimeTrigger },
 }) do
@@ -1550,4 +2007,4 @@ for _, reg in ipairs({
 end
 vu_log("vu.lua parsed")
 -- Test harness hook (tests/run_tests.py sets VU_UNDER_TEST; the game never does).
-if VU_UNDER_TEST then VU_UNDER_TEST.families, VU_UNDER_TEST.factions = VU_FAMILIES, VU_FACTIONS end
+if VU_UNDER_TEST then VU_UNDER_TEST.families, VU_UNDER_TEST.factions, VU_UNDER_TEST.state = VU_FAMILIES, VU_FACTIONS, VU end

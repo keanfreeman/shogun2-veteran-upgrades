@@ -2,7 +2,10 @@
 -- Only behaviour vu.lua relies on is modelled; signatures follow what was confirmed in game.
 
 MOCK = { log = {}, locks = {}, bundles = {}, created = {}, disbanded = {}, saved = {}, triggers = {},
-	player = MOCK_PLAYER or "shimazu" }
+	player = MOCK_PLAYER or "shimazu",
+	-- Multiplayer runs (tests/run_tests.py, two of these side by side): MOCK_HUMANS is the set of human
+	-- clans; unit renames go to MOCK.sent and the runner delivers them to every machine's MOCK.names.
+	mp = MOCK_MP, humans = MOCK_HUMANS, names = {}, sent = {} }
 VU_UNDER_TEST = {}
 local handlers = {}
 
@@ -125,15 +128,23 @@ Component = {
 }
 
 CampaignUI = {
+	IsMultiplayer = MOCK_MP ~= nil and function() return MOCK_MP end or nil,
+	RegimentName = function(u) return MOCK.names[u] or "Regiment" end,
+	SetMyUnitName = function(u, name) MOCK.sent[#MOCK.sent + 1] = { u = u, name = name } end,
 	PlayerFactionId = function() return MOCK.player end,
 	InitialiseUnitDetails = function(u) return MOCK.unit_details[u] end,
 	DisbandUnit = function(u) MOCK.disbanded[#MOCK.disbanded + 1] = u end,
 	RetrieveFactionMilitaryForceLists = function(f, armies)
+		if MOCK.forces then return MOCK.forces[f] or {} end
 		return { { Address = "CHAR:army1", Name = "Tanegashima", PosX = -246, PosY = -161 },
 			{ Address = "CHAR:army2", Name = "Second", PosX = 10, PosY = 20 } }
 	end,
 	RetrieveContainedEntitiesFromCharacter = function(c, t)
 		local out = { Units = {} }
+		if MOCK.force_units then
+			for _, u in ipairs(MOCK.force_units[c] or {}) do out.Units[#out.Units + 1] = { Address = u } end
+			return out
+		end
 		if c == "CHAR:army1" then
 			for _, n in ipairs(MOCK.cards.kids) do out.Units[#out.Units + 1] = { Address = n.unit_ptr } end
 		else
@@ -146,7 +157,11 @@ CampaignUI = {
 
 conditions = {
 	FactionKeyIsLocal = function(k, c) return false end,   -- as in game at NewCampaignStarted
-	FactionIsHuman = function(a, b) if b == nil then return a.human end return a == MOCK.player end,
+	FactionIsHuman = function(a, b)
+		if b == nil then return a.human end
+		if MOCK.humans then return MOCK.humans[a] == true end
+		return a == MOCK.player
+	end,
 	FactionName = function(k, c) return k == c.faction end,
 	UnitType = function(k, c) return k == c.unit end,
 	UnitWonBattle = function(c) return c.won end,

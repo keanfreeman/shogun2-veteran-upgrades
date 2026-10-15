@@ -103,7 +103,7 @@ STAT_ICON = {"reload": "skill_reload", "accuracy_mod": "skill_accuracy", "melee_
              "armour_mod": "skill_armour", "morale": "skill_morale"}
 ICON = "data/ui/campaign ui/pips/effect_admiral.tga"
 START_POINTS = 0  # points come from battles (vu.lua: VU_OnUnitCompletedBattle)
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 DEBUG = os.environ.get("VU_DEBUG") == "1"   # debug build: logs the panel's UI tree + tooltips (tools/vu_ui_audit.py)
 
 # Ability unlocks are unit-record COPIES: abilities attached through unit_to_unit_abilities apply

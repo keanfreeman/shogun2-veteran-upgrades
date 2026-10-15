@@ -78,3 +78,22 @@ reversed.
   `SetTooltipText(text, true)` sets the tooltip for all states; `ShaderTechniqueSet("normal_t0" |
   "set_greyscale_t0", true)`.
 - The campaign UI is rebuilt after every battle (`UICreated` again): drop all component references.
+
+## Multiplayer campaigns (from empire.retail.dll; not yet confirmed in game)
+
+- The campaign runs in **lockstep** on every machine: game events (`FactionTurnStart`,
+  `FactionTurnEnd`, `UnitCompletedBattle`, ...) run the scripts on every machine at the same point,
+  and an end-of-turn checksum detects desyncs (`campaign_desync_occured`, `MPCampaignResync`). A
+  desync is resynced from the host: script changes made on one machine only are lost.
+- Player actions travel as campaign commands (`CCQ_*` strings in the DLL), executed in order on every
+  machine. Script calls that change the game from a click (`apply_effect_bundle`, the recruitment
+  restrictions) are **not** commands: they change one machine's game. `create_force`, `create_agent`,
+  `kill_character` and `hide/unhide_character` go through the command queue when their last argument
+  is `true` (`CCQ_SCRIPTING_*`), so Retrain's `create_force(..., true)` reaches every machine.
+- `CampaignUI.SetMyUnitName(unit_address, name)` sends `CCQ_SET_UNIT_CUSTOM_NAME`;
+  `CampaignUI.RegimentName(unit_address)` reads the name. The mod uses this to send purchases.
+- `CampaignUI.IsMultiplayer()`, `CampaignUI.IsPlayersTurn()`; `conditions.FactionKeyIsLocal(key, ctx)`
+  tells which clan is this machine's (false for all at `NewCampaignStarted`).
+- Hosting starts a Steam game server; one of its two setups (next to the Steam lobby code) uses
+  `k_EServerModeAuthenticationAndSecure` (VAC-secured), the other authentication only. Which game
+  modes use which isn't confirmed. The DLL kicks VAC-banned players (`network_message_vac_player_kicked`).

@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.2.0 (unreleased: multiplayer not yet tested on two machines)
+- Multiplayer campaigns: every player's upgrades now stick. Up to 1.1.0 a purchase changed only the
+  buyer's game, the game resynced from the host at the end of the turn, and a guest's upgrades
+  vanished. Purchases are now sent to every player (in the names of a few of the buyer's units) and
+  take effect for everyone when the buyer ends the turn; the names are put back at the next turn.
+  Each clan has its own points, from its own battles.
+- Multiplayer campaigns saved with 1.1.0 or older: the upgrades in the save can't be assigned to a
+  player, so they are refunded as points to every player.
+- Single-player saves are unchanged.
+- Debug builds in multiplayer: 100 points for every human clan per session.
+
 ## 1.1.0
 - Compatibility with overhauls that replace the campaign scripts (e.g. Master of Strategy Sengoku):
   the mod no longer ships `scripting.lua`; its code is appended to `export_advice.lua` instead.
