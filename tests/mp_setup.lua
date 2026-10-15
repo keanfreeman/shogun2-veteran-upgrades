@@ -1,5 +1,10 @@
 -- Multiplayer runs: each clan has one army with a general and four units (the same addresses on every
 -- machine, like the game's unit ids), and helpers for the runner (tests/run_tests.py, run_mp).
+-- The unit type under test: Yari Ashigaru, whatever this edition's data calls its key and lines.
+for _, f in ipairs(VU_UNDER_TEST.families) do if f.name == "Yari Ashigaru" and #f.copies > 0 then MOCK.yari = f end end
+assert(MOCK.yari, "no Yari Ashigaru unit type with an ability")
+MOCK.yari_key = MOCK.yari.copies[1].base
+for _, l in ipairs(MOCK.yari.lines) do if l.kind == "ability" and not MOCK.yari_ability then MOCK.yari_ability = l.label end end
 MOCK.forces = {
 	shimazu = { { Address = "CHAR:shimazu1", Name = "Shimazu army", PosX = 0, PosY = 0 } },
 	oda = { { Address = "CHAR:oda1", Name = "Oda army", PosX = 50, PosY = 50 } },
@@ -10,7 +15,7 @@ for faction, armies in pairs(MOCK.forces) do
 	for i = 1, 4 do
 		local u = "UNIT:" .. faction .. i
 		units[i] = u
-		MOCK.unit_details[u] = { UnitRecord = { Key = "Inf_Spear_Yari_Ashigaru" }, Experience = 0, Men = 160,
+		MOCK.unit_details[u] = { UnitRecord = { Key = MOCK.yari_key }, Experience = 0, Men = 160,
 			CharacterPtr = i == 1 and armies[1].Address or nil }
 		MOCK.names[u] = "Yari Ashigaru"
 	end

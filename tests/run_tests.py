@@ -107,7 +107,7 @@ def run_mp():
 
     def battle(ms, faction, human=True, n=1):
         for _ in range(n):
-            ctx = f"{{ human = {'true' if human else 'false'}, faction = '{faction}', unit = 'Inf_Spear_Yari_Ashigaru', won = true }}"
+            ctx = f"{{ human = {'true' if human else 'false'}, faction = '{faction}', unit = MOCK.yari_key, won = true }}"
             fire(ms, "UnitCompletedBattle", ctx)
             fire(ms, "UnitCompletedBattle", ctx)   # two units, one battle
             fire(ms, "CharacterCompletedBattle")
@@ -163,13 +163,13 @@ def run_mp():
 
     # The host buys an ability (unit copies): locks change on both machines at its turn end.
     fire(ms, "FactionTurnStart", "{ string = 'shimazu' }")
-    host.execute("MOCK.buy('Yari Ashigaru', 'Inspire Unit', 1)")
+    host.execute("MOCK.buy('Yari Ashigaru', MOCK.yari_ability, 1)")
     deliver(ms)
-    check(not host.globals().MOCK.locks["shimazu/Inf_Spear_Yari_Ashigaru"], "copy locks wait for the turn end")
+    plain = "shimazu/" + host.eval("MOCK.yari_key")
+    check(not host.globals().MOCK.locks[plain], "copy locks wait for the turn end")
     fire(ms, "FactionTurnEnd", "{ string = 'shimazu' }")
     same(ms, "host ability")
-    check(host.globals().MOCK.locks["shimazu/Inf_Spear_Yari_Ashigaru"] and guest.globals().MOCK.locks["shimazu/Inf_Spear_Yari_Ashigaru"],
-          "plain Yari Ashigaru locked for the host on both machines")
+    check(host.globals().MOCK.locks[plain] and guest.globals().MOCK.locks[plain], "plain Yari Ashigaru locked for the host on both machines")
 
     # A unit carrying the message is lost before the turn ends: nothing applied, sent again next turn.
     fire(ms, "FactionTurnStart", "{ string = 'oda' }")
@@ -203,7 +203,7 @@ def run_mp():
           "clan state survives save/load")
 
     # An older multiplayer save (one clan's upgrades, no owner): refunded to both clans.
-    legacy = {"VU_POOL": 4, "VU_L_inf_spear_yari_ashigaru__stat_melee_attack_mod": 2}
+    legacy = {"VU_POOL": 4, f"VU_L_{host.eval('MOCK.yari.id')}__stat_melee_attack_mod": 2}
     ms3 = new_pair(legacy)
     fire(ms3, "LoadingGame")
     fire(ms3, "UICreated", "{ string = 'Campaign UI', component = MOCK.root }")
